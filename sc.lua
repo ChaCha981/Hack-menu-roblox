@@ -144,7 +144,7 @@ local Language = {
 	EN = {
 
 		title = "XEIREN 5V5",
-		subtitle = "Combat Hub",
+		subtitle = "Made In Cambodia",
 
 		aimTab = "AIM",
 		espTab = "ESP",
