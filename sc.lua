@@ -38,7 +38,7 @@ local PASSWORD = "anakin"
 -- Upload your logo to Roblox and replace this.
 -- Example:
 -- rbxassetid://123456789
-local LOGO_IMAGE = ""
+local LOGO_IMAGE = "https://raw.githubusercontent.com/ChaCha981/Hack-menu-roblox/refs/heads/main/IMG_2452.jpeg"
 
 --==============================================================
 -- SETTINGS
