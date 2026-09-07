@@ -1,122 +1,94 @@
---// =========================================================
---// COMBAT HUB
---// Password: anakin
+--// Xeiren 5v5 Combat Hub
 --// Roblox Studio LocalScript
---//
---// Features:
---// Password Lock
---// Aim Assist
---// ESP
---// Tracers
---// Fly
---// Speed Run
---// Aim Distance
---// Aim FOV
---// Aim Speed
---// ESP Distance
---// Team Check
---// Wall Check
---// Draggable UI
---// Mobile + PC
---// Close / Reopen
---// Keyboard Shortcuts
---// Respawn Support
---// =========================================================
+--// Password: anakin
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local Camera = Workspace.CurrentCamera
 
---============================================================
+--==================================================
 -- SETTINGS
---============================================================
-
-local PASSWORD = "anakin"
+--==================================================
 
 local Settings = {
+    -- AIM
     AimEnabled = false,
+    Full360 = true,
+    LockStrength = 100,
     AimSpeed = 25,
     AimDistance = 600,
     AimFOV = 180,
     AimPart = "Head",
 
+    -- ESP
     ESPEnabled = false,
+    ESPAlwaysOnTop = true,
+    ESPDistance = 600,
+    ESPHealth = true,
+    ESPName = true,
+    ESPDistanceText = true,
+    ESPBox = true,
+    ESPHead = true,
+    ESPTeamColor = false,
+    ESPUseTeamCheck = true,
+
+    -- TRACERS
     TracerEnabled = false,
 
-    ESPDistance = 600,
-    TracerThickness = 0.08,
-
+    -- CHECKS
     TeamCheck = true,
-    WallCheck = true,
+    WallCheck = false,
 
+    -- FLY
     FlyEnabled = false,
-    FlySpeed = 50,
+    FlySpeed = 70,
+    FlyVerticalSpeed = 60,
 
+    -- SPEED
     SpeedEnabled = false,
     SpeedRun = 32,
+
+    -- MENU
+    MenuVisible = true
 }
 
---============================================================
--- VARIABLES
---============================================================
+--==================================================
+-- STATE
+--==================================================
 
 local Character
 local Humanoid
 local RootPart
 
-local NormalWalkSpeed = 16
+local OriginalWalkSpeed = 16
+local OriginalAutoRotate = true
 
-local FlyConnection
-local SpeedConnection
+local FlyAttachment
+local FlyVelocity
 
 local ESPObjects = {}
 local TracerObjects = {}
 
-local MainGui
-local MainFrame
+local Connections = {}
 
-local FlyVelocity
-local FlyAttachment
+--==================================================
+-- UTILS
+--==================================================
 
---============================================================
--- CHARACTER
---============================================================
-
-local function SetupCharacter(char)
-    Character = char
-    Humanoid = char:WaitForChild("Humanoid")
-    RootPart = char:WaitForChild("HumanoidRootPart")
-
-    NormalWalkSpeed = Humanoid.WalkSpeed
-
-    task.wait(0.2)
-
-    if Settings.SpeedEnabled then
-        Humanoid.WalkSpeed = Settings.SpeedRun
+local function DisconnectAll()
+    for _, connection in ipairs(Connections) do
+        pcall(function()
+            connection:Disconnect()
+        end)
     end
+    table.clear(Connections)
 end
-
-if LocalPlayer.Character then
-    SetupCharacter(LocalPlayer.Character)
-end
-
-LocalPlayer.CharacterAdded:Connect(function(char)
-    Settings.FlyEnabled = false
-
-    SetupCharacter(char)
-
-    if Settings.SpeedEnabled then
-        task.wait(0.2)
-        Humanoid.WalkSpeed = Settings.SpeedRun
-    end
-end)
-
---============================================================
--- UTILITY
---============================================================
 
 local function GetCharacter(player)
     if not player then
@@ -126,147 +98,232 @@ local function GetCharacter(player)
     return player.Character
 end
 
-local function GetHumanoid(player)
-    local char = GetCharacter(player)
-
-    if not char then
+local function GetHumanoid(character)
+    if not character then
         return nil
     end
 
-    return char:FindFirstChildOfClass("Humanoid")
+    return character:FindFirstChildOfClass("Humanoid")
 end
 
-local function GetRoot(player)
-    local char = GetCharacter(player)
-
-    if not char then
+local function GetRoot(character)
+    if not character then
         return nil
     end
 
-    return char:FindFirstChild("HumanoidRootPart")
+    return character:FindFirstChild("HumanoidRootPart")
 end
 
 local function IsAlive(player)
-    local hum = GetHumanoid(player)
+    local character = GetCharacter(player)
+    local humanoid = GetHumanoid(character)
+    local root = GetRoot(character)
 
-    return hum and hum.Health > 0
+    return character
+        and humanoid
+        and root
+        and humanoid.Health > 0
 end
 
 local function IsEnemy(player)
-    if player == LocalPlayer then
-        return false
-    end
-
-    if not IsAlive(player) then
+    if not player or player == LocalPlayer then
         return false
     end
 
     if Settings.TeamCheck then
-        if LocalPlayer.Team ~= nil and player.Team == LocalPlayer.Team then
-            return false
+        if player.Team ~= nil and LocalPlayer.Team ~= nil then
+            if player.Team == LocalPlayer.Team then
+                return false
+            end
         end
     end
 
     return true
 end
 
---============================================================
--- WALL CHECK
---============================================================
-
-local function IsVisible(targetCharacter, targetPart)
-    if not Settings.WallCheck then
-        return true
+local function GetDistanceFromLocal(player)
+    if not IsAlive(player) or not RootPart then
+        return math.huge
     end
 
-    if not Character then
-        return false
-    end
+    local root = GetRoot(player.Character)
 
-    local Camera = workspace.CurrentCamera
-
-    if not Camera then
-        return false
-    end
-
-    local Origin = Camera.CFrame.Position
-    local Direction = targetPart.Position - Origin
-
-    local Params = RaycastParams.new()
-    Params.FilterType = Enum.RaycastFilterType.Exclude
-    Params.FilterDescendantsInstances = {
-        Character
-    }
-
-    Params.IgnoreWater = true
-
-    local Result = workspace:Raycast(
-        Origin,
-        Direction,
-        Params
-    )
-
-    if not Result then
-        return true
-    end
-
-    return Result.Instance:IsDescendantOf(targetCharacter)
+    return (root.Position - RootPart.Position).Magnitude
 end
 
---============================================================
--- AIM TARGET
---============================================================
+--==================================================
+-- CHARACTER
+--==================================================
 
-local function FindAimTarget()
-    local Camera = workspace.CurrentCamera
+local function SetupCharacter(character)
+    Character = character
+    Humanoid = character:WaitForChild("Humanoid", 10)
+    RootPart = character:WaitForChild("HumanoidRootPart", 10)
 
-    if not Camera then
+    if Humanoid then
+        OriginalWalkSpeed = Humanoid.WalkSpeed
+        OriginalAutoRotate = Humanoid.AutoRotate
+    end
+
+    if Settings.FlyEnabled then
+        Settings.FlyEnabled = false
+    end
+end
+
+if LocalPlayer.Character then
+    SetupCharacter(LocalPlayer.Character)
+end
+
+table.insert(Connections, LocalPlayer.CharacterAdded:Connect(function(character)
+    task.wait(0.5)
+    SetupCharacter(character)
+end))
+
+--==================================================
+-- VISIBILITY / WALL CHECK
+--==================================================
+
+local function IsVisible(targetPart)
+    if not targetPart or not Camera then
+        return false
+    end
+
+    local origin = Camera.CFrame.Position
+    local direction = targetPart.Position - origin
+
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {
+        Character
+    }
+    params.IgnoreWater = true
+
+    local result = Workspace:Raycast(
+        origin,
+        direction,
+        params
+    )
+
+    if not result then
+        return true
+    end
+
+    if result.Instance:IsDescendantOf(targetPart.Parent) then
+        return true
+    end
+
+    return false
+end
+
+--==================================================
+-- AIM PART
+--==================================================
+
+local function GetAimPart(character)
+    if not character then
         return nil
     end
 
-    local ViewportSize = Camera.ViewportSize
-    local Center = Vector2.new(
-        ViewportSize.X / 2,
-        ViewportSize.Y / 2
+    if Settings.AimPart == "Body" then
+        return character:FindFirstChild("HumanoidRootPart")
+            or character:FindFirstChild("UpperTorso")
+            or character:FindFirstChild("Torso")
+    end
+
+    return character:FindFirstChild("Head")
+        or character:FindFirstChild("HumanoidRootPart")
+end
+
+--==================================================
+-- TARGET FINDER
+--==================================================
+
+local function FindAimTarget()
+    if not RootPart or not Camera then
+        return nil
+    end
+
+    local bestPlayer = nil
+    local bestScore = math.huge
+
+    local viewportSize = Camera.ViewportSize
+    local screenCenter = Vector2.new(
+        viewportSize.X / 2,
+        viewportSize.Y / 2
     )
 
-    local BestPlayer = nil
-    local BestDistance = math.huge
-
     for _, player in ipairs(Players:GetPlayers()) do
+        if IsEnemy(player) and IsAlive(player) then
 
-        if IsEnemy(player) then
+            local character = player.Character
+            local targetPart = GetAimPart(character)
+            local targetRoot = GetRoot(character)
 
-            local char = player.Character
-            local targetPart = char and char:FindFirstChild(Settings.AimPart)
+            if targetPart and targetRoot then
 
-            if targetPart then
+                local distance = (
+                    targetRoot.Position -
+                    RootPart.Position
+                ).Magnitude
 
-                local WorldDistance =
-                    (targetPart.Position - Camera.CFrame.Position).Magnitude
+                if distance <= Settings.AimDistance then
 
-                if WorldDistance <= Settings.AimDistance then
+                    local allowed = true
 
-                    local ScreenPosition, OnScreen =
-                        Camera:WorldToViewportPoint(targetPart.Position)
+                    if Settings.WallCheck then
+                        allowed = IsVisible(targetPart)
+                    end
 
-                    if OnScreen then
+                    if allowed then
 
-                        local ScreenDistance =
-                            (Vector2.new(
-                                ScreenPosition.X,
-                                ScreenPosition.Y
-                            ) - Center).Magnitude
+                        --======================================
+                        -- 360 MODE
+                        --======================================
 
-                        if ScreenDistance <= Settings.AimFOV then
+                        if Settings.Full360 then
 
-                            if IsVisible(char, targetPart) then
+                            -- Full 360:
+                            -- choose nearest valid target.
+                            local score = distance
 
-                                if ScreenDistance < BestDistance then
-                                    BestDistance = ScreenDistance
-                                    BestPlayer = player
+                            if score < bestScore then
+                                bestScore = score
+                                bestPlayer = player
+                            end
+
+                        else
+
+                            --==================================
+                            -- NORMAL FOV MODE
+                            --==================================
+
+                            local screenPosition, onScreen =
+                                Camera:WorldToViewportPoint(
+                                    targetPart.Position
+                                )
+
+                            if onScreen and screenPosition.Z > 0 then
+
+                                local screenDistance =
+                                    (
+                                        Vector2.new(
+                                            screenPosition.X,
+                                            screenPosition.Y
+                                        ) -
+                                        screenCenter
+                                    ).Magnitude
+
+                                if screenDistance <= Settings.AimFOV then
+
+                                    local score =
+                                        screenDistance +
+                                        distance * 0.01
+
+                                    if score < bestScore then
+                                        bestScore = score
+                                        bestPlayer = player
+                                    end
                                 end
-
                             end
                         end
                     end
@@ -275,309 +332,522 @@ local function FindAimTarget()
         end
     end
 
-    return BestPlayer
+    return bestPlayer
 end
 
---============================================================
+--==================================================
 -- AIM ASSIST
---============================================================
+--==================================================
 
-local function UpdateAim()
+local CurrentTarget = nil
+
+local function UpdateAim(dt)
     if not Settings.AimEnabled then
+        CurrentTarget = nil
         return
     end
 
-    if not Character or not RootPart then
+    if not Camera or not RootPart then
         return
     end
 
-    local Camera = workspace.CurrentCamera
+    CurrentTarget = FindAimTarget()
 
-    if not Camera then
+    if not CurrentTarget then
         return
     end
 
-    local Target = FindAimTarget()
+    local character = CurrentTarget.Character
+    local targetPart = GetAimPart(character)
 
-    if not Target then
+    if not targetPart then
         return
     end
 
-    local TargetCharacter = Target.Character
+    local cameraPosition = Camera.CFrame.Position
+    local targetPosition = targetPart.Position
 
-    if not TargetCharacter then
-        return
-    end
+    local targetCFrame = CFrame.lookAt(
+        cameraPosition,
+        targetPosition
+    )
 
-    local TargetPart =
-        TargetCharacter:FindFirstChild(Settings.AimPart)
+    -- Strong Lock:
+    -- 1 = very smooth
+    -- 100 = extremely strong
+    local strength =
+        math.clamp(Settings.LockStrength, 1, 100)
 
-    if not TargetPart then
-        return
-    end
+    local speed =
+        math.max(Settings.AimSpeed, 1)
 
-    local Direction =
-        TargetPart.Position - Camera.CFrame.Position
-
-    if Direction.Magnitude <= 0 then
-        return
-    end
-
-    local TargetCFrame =
-        CFrame.lookAt(
-            Camera.CFrame.Position,
-            TargetPart.Position
+    local alpha =
+        1 - math.exp(
+            -(speed * (strength / 100)) * dt
         )
 
-    local Alpha =
-        math.clamp(Settings.AimSpeed / 100, 0.01, 1)
+    alpha = math.clamp(alpha, 0.01, 1)
 
     Camera.CFrame =
         Camera.CFrame:Lerp(
-            TargetCFrame,
-            Alpha
+            targetCFrame,
+            alpha
         )
 end
 
---============================================================
--- ESP
---============================================================
+--==================================================
+-- ESP GUI
+--==================================================
 
-local function RemoveESP(player)
-    local Highlight = ESPObjects[player]
-
-    if Highlight then
-        Highlight:Destroy()
-        ESPObjects[player] = nil
-    end
-end
+local ESPFolder = Instance.new("Folder")
+ESPFolder.Name = "XeirenESP"
+ESPFolder.Parent = PlayerGui
 
 local function CreateESP(player)
+
+    if ESPObjects[player] then
+        return ESPObjects[player]
+    end
+
+    local objects = {}
+
+    --==============================================
+    -- HIGHLIGHT / BOX
+    --==============================================
+
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "ESP_Highlight"
+    highlight.Enabled = false
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+
+    highlight.FillTransparency = 0.80
+    highlight.OutlineTransparency = 0
+
+    highlight.Parent = ESPFolder
+
+    objects.Highlight = highlight
+
+    --==============================================
+    -- BILLBOARD
+    --==============================================
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "ESP_Info"
+    billboard.Size = UDim2.fromOffset(220, 75)
+    billboard.StudsOffset = Vector3.new(0, 3.5, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Enabled = false
+    billboard.MaxDistance = Settings.ESPDistance
+
+    billboard.Parent = ESPFolder
+
+    objects.Billboard = billboard
+
+    --==============================================
+    -- NAME
+    --==============================================
+
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Name = "Name"
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Size = UDim2.new(1, 0, 0, 22)
+    nameLabel.Position = UDim2.new(0, 0, 0, 0)
+    nameLabel.Font = Enum.Font.GothamBold
+    nameLabel.TextSize = 14
+    nameLabel.TextStrokeTransparency = 0.25
+    nameLabel.TextColor3 = Color3.new(1, 1, 1)
+    nameLabel.Text = player.Name
+    nameLabel.Parent = billboard
+
+    objects.NameLabel = nameLabel
+
+    --==============================================
+    -- DISTANCE
+    --==============================================
+
+    local distanceLabel = Instance.new("TextLabel")
+    distanceLabel.Name = "Distance"
+    distanceLabel.BackgroundTransparency = 1
+    distanceLabel.Size = UDim2.new(1, 0, 0, 18)
+    distanceLabel.Position = UDim2.new(0, 0, 0, 22)
+    distanceLabel.Font = Enum.Font.Gotham
+    distanceLabel.TextSize = 12
+    distanceLabel.TextStrokeTransparency = 0.3
+    distanceLabel.TextColor3 = Color3.new(1, 1, 1)
+    distanceLabel.Parent = billboard
+
+    objects.DistanceLabel = distanceLabel
+
+    --==============================================
+    -- HEALTH BACKGROUND
+    --==============================================
+
+    local healthBack = Instance.new("Frame")
+    healthBack.Name = "HealthBackground"
+    healthBack.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    healthBack.BorderSizePixel = 0
+    healthBack.Size = UDim2.new(0.75, 0, 0, 8)
+    healthBack.Position = UDim2.new(0.125, 0, 0, 43)
+    healthBack.Parent = billboard
+
+    objects.HealthBack = healthBack
+
+    --==============================================
+    -- HEALTH BAR
+    --==============================================
+
+    local healthBar = Instance.new("Frame")
+    healthBar.Name = "Health"
+    healthBar.BackgroundColor3 = Color3.fromRGB(50, 255, 100)
+    healthBar.BorderSizePixel = 0
+    healthBar.Size = UDim2.new(1, 0, 1, 0)
+    healthBar.Parent = healthBack
+
+    objects.HealthBar = healthBar
+
+    --==============================================
+    -- HEALTH TEXT
+    --==============================================
+
+    local healthText = Instance.new("TextLabel")
+    healthText.Name = "HealthText"
+    healthText.BackgroundTransparency = 1
+    healthText.Size = UDim2.new(1, 0, 0, 18)
+    healthText.Position = UDim2.new(0, 0, 0, 51)
+    healthText.Font = Enum.Font.GothamBold
+    healthText.TextSize = 11
+    healthText.TextStrokeTransparency = 0.3
+    healthText.TextColor3 = Color3.new(1, 1, 1)
+    healthText.Parent = billboard
+
+    objects.HealthText = healthText
+
+    ESPObjects[player] = objects
+
+    return objects
+end
+
+--==================================================
+-- TRACER
+--==================================================
+
+local function CreateTracer(player)
+
+    if TracerObjects[player] then
+        return TracerObjects[player]
+    end
+
+    local data = {}
+
+    local startPart = Instance.new("Part")
+    startPart.Name = "TracerStart"
+    startPart.Anchored = true
+    startPart.CanCollide = false
+    startPart.CanQuery = false
+    startPart.CanTouch = false
+    startPart.Transparency = 1
+    startPart.Size = Vector3.new(0.1, 0.1, 0.1)
+    startPart.Parent = ESPFolder
+
+    local startAttachment = Instance.new("Attachment")
+    startAttachment.Parent = startPart
+
+    local endAttachment = Instance.new("Attachment")
+
+    local beam = Instance.new("Beam")
+    beam.Name = "ESP_Tracer"
+    beam.Attachment0 = startAttachment
+    beam.Attachment1 = endAttachment
+
+    beam.FaceCamera = true
+    beam.Width0 = 0.08
+    beam.Width1 = 0.03
+    beam.LightEmission = 1
+    beam.Transparency = NumberSequence.new(0.15)
+    beam.Enabled = false
+
+    beam.Parent = startPart
+
+    data.StartPart = startPart
+    data.StartAttachment = startAttachment
+    data.EndAttachment = endAttachment
+    data.Beam = beam
+
+    TracerObjects[player] = data
+
+    return data
+end
+
+--==================================================
+-- UPDATE ESP
+--==================================================
+
+local function UpdateESP(player)
+
     if player == LocalPlayer then
         return
     end
 
-    if not Settings.ESPEnabled then
+    local objects = ESPObjects[player] or CreateESP(player)
+    local tracer = TracerObjects[player] or CreateTracer(player)
+
+    local valid =
+        Settings.ESPEnabled
+        and IsEnemy(player)
+        and IsAlive(player)
+
+    if not valid then
+
+        objects.Highlight.Enabled = false
+        objects.Billboard.Enabled = false
+        tracer.Beam.Enabled = false
+
         return
     end
 
-    if not IsEnemy(player) then
-        RemoveESP(player)
+    local character = player.Character
+    local root = GetRoot(character)
+    local humanoid = GetHumanoid(character)
+
+    if not root or not humanoid then
         return
     end
 
-    local char = player.Character
+    local distance = GetDistanceFromLocal(player)
 
-    if not char then
+    if distance > Settings.ESPDistance then
+
+        objects.Highlight.Enabled = false
+        objects.Billboard.Enabled = false
+        tracer.Beam.Enabled = false
+
         return
     end
 
-    local root = char:FindFirstChild("HumanoidRootPart")
+    --==============================================
+    -- COLOR
+    --==============================================
 
-    if not root then
-        return
+    local color = Color3.fromRGB(255, 70, 70)
+
+    if Settings.ESPTeamColor then
+        color = player.TeamColor.Color
     end
 
-    if not Character or not RootPart then
-        return
+    --==============================================
+    -- HIGHLIGHT
+    --==============================================
+
+    objects.Highlight.Adornee = character
+    objects.Highlight.Enabled = Settings.ESPBox
+    objects.Highlight.FillColor = color
+    objects.Highlight.OutlineColor = Color3.new(1, 1, 1)
+
+    if Settings.ESPAlwaysOnTop then
+        objects.Highlight.DepthMode =
+            Enum.HighlightDepthMode.AlwaysOnTop
+    else
+        objects.Highlight.DepthMode =
+            Enum.HighlightDepthMode.Occluded
     end
 
-    local Distance =
-        (root.Position - RootPart.Position).Magnitude
+    --==============================================
+    -- BILLBOARD
+    --==============================================
 
-    if Distance > Settings.ESPDistance then
-        RemoveESP(player)
-        return
+    objects.Billboard.Adornee = root
+    objects.Billboard.MaxDistance = Settings.ESPDistance
+    objects.Billboard.Enabled = true
+
+    objects.NameLabel.Visible = Settings.ESPName
+    objects.DistanceLabel.Visible = Settings.ESPDistanceText
+
+    objects.NameLabel.Text =
+        player.DisplayName ..
+        "  [" ..
+        player.Name ..
+        "]"
+
+    objects.NameLabel.TextColor3 = color
+
+    objects.DistanceLabel.Text =
+        string.format(
+            "%.0f studs",
+            distance
+        )
+
+    --==============================================
+    -- HEALTH
+    --==============================================
+
+    if Settings.ESPHealth then
+
+        objects.HealthBack.Visible = true
+        objects.HealthBar.Visible = true
+        objects.HealthText.Visible = true
+
+        local maxHealth =
+            math.max(humanoid.MaxHealth, 1)
+
+        local health =
+            math.clamp(
+                humanoid.Health / maxHealth,
+                0,
+                1
+            )
+
+        objects.HealthBar.Size =
+            UDim2.new(
+                health,
+                0,
+                1,
+                0
+            )
+
+        objects.HealthText.Text =
+            string.format(
+                "%d / %d HP",
+                humanoid.Health,
+                maxHealth
+            )
+
+        if health > 0.6 then
+            objects.HealthBar.BackgroundColor3 =
+                Color3.fromRGB(50, 255, 100)
+        elseif health > 0.3 then
+            objects.HealthBar.BackgroundColor3 =
+                Color3.fromRGB(255, 210, 50)
+        else
+            objects.HealthBar.BackgroundColor3 =
+                Color3.fromRGB(255, 50, 50)
+        end
+
+    else
+
+        objects.HealthBack.Visible = false
+        objects.HealthBar.Visible = false
+        objects.HealthText.Visible = false
+
     end
 
-    if ESPObjects[player] then
-        return
-    end
+    --==============================================
+    -- HEAD MARKER
+    --==============================================
 
-    local Highlight = Instance.new("Highlight")
+    if Settings.ESPHead then
 
-    Highlight.Name = "CombatHubESP"
-    Highlight.Adornee = char
+        local head = character:FindFirstChild("Head")
 
-    Highlight.FillTransparency = 0.55
-    Highlight.OutlineTransparency = 0
+        if head then
 
-    Highlight.DepthMode =
-        Enum.HighlightDepthMode.AlwaysOnTop
+            if not objects.HeadHighlight then
 
-    Highlight.Parent = char
+                local headHighlight =
+                    Instance.new("Highlight")
 
-    ESPObjects[player] = Highlight
-end
+                headHighlight.Name =
+                    "ESP_Head"
 
-local function UpdateESP()
-    for _, player in ipairs(Players:GetPlayers()) do
+                headHighlight.FillTransparency = 0.3
+                headHighlight.OutlineTransparency = 0
+                headHighlight.DepthMode =
+                    Enum.HighlightDepthMode.AlwaysOnTop
 
-        if player ~= LocalPlayer then
+                headHighlight.Parent =
+                    ESPFolder
 
-            if Settings.ESPEnabled then
-                CreateESP(player)
-            else
-                RemoveESP(player)
+                objects.HeadHighlight =
+                    headHighlight
             end
 
+            objects.HeadHighlight.Adornee = head
+            objects.HeadHighlight.FillColor = color
+            objects.HeadHighlight.OutlineColor =
+                Color3.new(1, 1, 1)
+
+            objects.HeadHighlight.Enabled = true
+
         end
+
+    elseif objects.HeadHighlight then
+
+        objects.HeadHighlight.Enabled = false
+
+    end
+
+    --==============================================
+    -- TRACER
+    --==============================================
+
+    if Settings.TracerEnabled then
+
+        local startPosition =
+            Camera.CFrame.Position
+
+        tracer.StartPart.Position =
+            startPosition
+
+        tracer.EndAttachment.Parent =
+            root
+
+        tracer.Beam.Color =
+            ColorSequence.new(color)
+
+        tracer.Beam.Enabled = true
+
+    else
+
+        tracer.Beam.Enabled = false
+
     end
 end
 
-Players.PlayerRemoving:Connect(function(player)
-    RemoveESP(player)
-end)
+--==================================================
+-- REMOVE ESP
+--==================================================
 
---============================================================
--- TRACERS
---============================================================
+local function RemoveESP(player)
 
-local TracerFolder = Instance.new("Folder")
-TracerFolder.Name = "CombatHubTracers"
-TracerFolder.Parent = workspace
+    local objects = ESPObjects[player]
 
-local OriginPart = Instance.new("Part")
-OriginPart.Name = "TracerOrigin"
-OriginPart.Anchored = true
-OriginPart.CanCollide = false
-OriginPart.CanTouch = false
-OriginPart.CanQuery = false
-OriginPart.Transparency = 1
-OriginPart.Size = Vector3.new(0.1, 0.1, 0.1)
-OriginPart.Parent = TracerFolder
+    if objects then
 
-local OriginAttachment = Instance.new("Attachment")
-OriginAttachment.Parent = OriginPart
+        for _, object in pairs(objects) do
 
-local function RemoveTracer(player)
-    local Data = TracerObjects[player]
-
-    if Data then
-
-        if Data.Beam then
-            Data.Beam:Destroy()
+            if typeof(object) == "Instance" then
+                pcall(function()
+                    object:Destroy()
+                end)
+            end
         end
 
-        if Data.Attachment then
-            Data.Attachment:Destroy()
+        ESPObjects[player] = nil
+    end
+
+    local tracer = TracerObjects[player]
+
+    if tracer then
+
+        if tracer.StartPart then
+            tracer.StartPart:Destroy()
         end
 
         TracerObjects[player] = nil
     end
 end
 
-local function CreateTracer(player)
-    if player == LocalPlayer then
-        return
-    end
+table.insert(
+    Connections,
+    Players.PlayerRemoving:Connect(RemoveESP)
+)
 
-    if not Settings.TracerEnabled then
-        return
-    end
-
-    if not IsEnemy(player) then
-        RemoveTracer(player)
-        return
-    end
-
-    local char = player.Character
-
-    if not char then
-        RemoveTracer(player)
-        return
-    end
-
-    local root = char:FindFirstChild("HumanoidRootPart")
-
-    if not root then
-        RemoveTracer(player)
-        return
-    end
-
-    if not Character or not RootPart then
-        return
-    end
-
-    local Distance =
-        (root.Position - RootPart.Position).Magnitude
-
-    if Distance > Settings.ESPDistance then
-        RemoveTracer(player)
-        return
-    end
-
-    if TracerObjects[player] then
-        return
-    end
-
-    local Attachment = Instance.new("Attachment")
-    Attachment.Name = "TracerAttachment"
-    Attachment.Parent = root
-
-    local Beam = Instance.new("Beam")
-
-    Beam.Name = "CombatHubTracer"
-
-    Beam.Attachment0 = OriginAttachment
-    Beam.Attachment1 = Attachment
-
-    Beam.Width0 = Settings.TracerThickness
-    Beam.Width1 = Settings.TracerThickness
-
-    Beam.FaceCamera = true
-
-    Beam.LightEmission = 1
-    Beam.LightInfluence = 0
-
-    Beam.Transparency =
-        NumberSequence.new(0.15)
-
-    Beam.Parent = TracerFolder
-
-    TracerObjects[player] = {
-        Beam = Beam,
-        Attachment = Attachment
-    }
-end
-
-local function UpdateTracers()
-    local Camera = workspace.CurrentCamera
-
-    if not Camera then
-        return
-    end
-
-    OriginPart.CFrame =
-        Camera.CFrame * CFrame.new(
-            0,
-            -Camera.ViewportSize.Y / 200,
-            0
-        )
-
-    for _, player in ipairs(Players:GetPlayers()) do
-
-        if player ~= LocalPlayer then
-
-            if Settings.TracerEnabled then
-                CreateTracer(player)
-            else
-                RemoveTracer(player)
-            end
-
-        end
-    end
-end
-
---============================================================
+--==================================================
 -- FLY
---============================================================
+--==================================================
 
 local function StopFly()
-    if FlyConnection then
-        FlyConnection:Disconnect()
-        FlyConnection = nil
-    end
+
+    Settings.FlyEnabled = false
 
     if FlyVelocity then
         FlyVelocity:Destroy()
@@ -588,982 +858,1674 @@ local function StopFly()
         FlyAttachment:Destroy()
         FlyAttachment = nil
     end
+
+    if Humanoid then
+        Humanoid.AutoRotate =
+            OriginalAutoRotate
+    end
 end
 
 local function StartFly()
+
+    if not RootPart or not Humanoid then
+        return
+    end
+
     StopFly()
 
-    if not Character or not Humanoid or not RootPart then
-        return
-    end
+    Settings.FlyEnabled = true
 
-    if Humanoid.Health <= 0 then
-        return
-    end
+    OriginalAutoRotate =
+        Humanoid.AutoRotate
 
-    FlyAttachment = Instance.new("Attachment")
-    FlyAttachment.Name = "CombatHubFlyAttachment"
-    FlyAttachment.Parent = RootPart
+    Humanoid.AutoRotate = false
 
-    FlyVelocity = Instance.new("LinearVelocity")
+    FlyAttachment =
+        Instance.new("Attachment")
 
-    FlyVelocity.Name = "CombatHubFlyVelocity"
+    FlyAttachment.Name =
+        "XeirenFlyAttachment"
 
-    FlyVelocity.Attachment0 = FlyAttachment
+    FlyAttachment.Parent =
+        RootPart
 
-    FlyVelocity.MaxForce = math.huge
+    FlyVelocity =
+        Instance.new("LinearVelocity")
 
-    FlyVelocity.VectorVelocity = Vector3.zero
+    FlyVelocity.Name =
+        "XeirenFlyVelocity"
+
+    FlyVelocity.Attachment0 =
+        FlyAttachment
 
     FlyVelocity.RelativeTo =
         Enum.ActuatorRelativeTo.World
 
-    FlyVelocity.Parent = RootPart
+    FlyVelocity.VelocityConstraintMode =
+        Enum.VelocityConstraintMode.Vector
 
-    FlyConnection = RunService.RenderStepped:Connect(function()
+    FlyVelocity.MaxForce =
+        math.huge
 
-        if not Settings.FlyEnabled then
-            StopFly()
-            return
-        end
+    FlyVelocity.VectorVelocity =
+        Vector3.zero
 
-        if not Character or not RootPart or not Humanoid then
-            return
-        end
-
-        local Camera = workspace.CurrentCamera
-
-        if not Camera then
-            return
-        end
-
-        local MoveDirection = Vector3.zero
-
-        local Look = Camera.CFrame.LookVector
-        local Right = Camera.CFrame.RightVector
-
-        if UserInputService:IsKeyDown(Enum.KeyCode.W) then
-            MoveDirection += Look
-        end
-
-        if UserInputService:IsKeyDown(Enum.KeyCode.S) then
-            MoveDirection -= Look
-        end
-
-        if UserInputService:IsKeyDown(Enum.KeyCode.D) then
-            MoveDirection += Right
-        end
-
-        if UserInputService:IsKeyDown(Enum.KeyCode.A) then
-            MoveDirection -= Right
-        end
-
-        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
-            MoveDirection += Vector3.new(0, 1, 0)
-        end
-
-        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
-            MoveDirection -= Vector3.new(0, 1, 0)
-        end
-
-        if MoveDirection.Magnitude > 0 then
-            MoveDirection =
-                MoveDirection.Unit * Settings.FlySpeed
-        end
-
-        FlyVelocity.VectorVelocity = MoveDirection
-
-        Humanoid.PlatformStand = false
-    end)
+    FlyVelocity.Parent =
+        RootPart
 end
 
-local function SetFly(state)
-    Settings.FlyEnabled = state
+local function ToggleFly()
 
-    if state then
-        StartFly()
-    else
+    if Settings.FlyEnabled then
         StopFly()
+    else
+        StartFly()
     end
 end
 
---============================================================
+local function UpdateFly()
+
+    if not Settings.FlyEnabled then
+        return
+    end
+
+    if not RootPart or not Humanoid then
+        StopFly()
+        return
+    end
+
+    if not FlyVelocity then
+        StartFly()
+        return
+    end
+
+    local direction =
+        Vector3.zero
+
+    local cameraCFrame =
+        Camera.CFrame
+
+    -- Horizontal forward direction
+    local forward =
+        Vector3.new(
+            cameraCFrame.LookVector.X,
+            0,
+            cameraCFrame.LookVector.Z
+        )
+
+    local right =
+        Vector3.new(
+            cameraCFrame.RightVector.X,
+            0,
+            cameraCFrame.RightVector.Z
+        )
+
+    if forward.Magnitude > 0 then
+        forward = forward.Unit
+    end
+
+    if right.Magnitude > 0 then
+        right = right.Unit
+    end
+
+    if UserInputService:IsKeyDown(
+        Enum.KeyCode.W
+    ) then
+        direction += forward
+    end
+
+    if UserInputService:IsKeyDown(
+        Enum.KeyCode.S
+    ) then
+        direction -= forward
+    end
+
+    if UserInputService:IsKeyDown(
+        Enum.KeyCode.D
+    ) then
+        direction += right
+    end
+
+    if UserInputService:IsKeyDown(
+        Enum.KeyCode.A
+    ) then
+        direction -= right
+    end
+
+    local horizontal = Vector3.zero
+
+    if direction.Magnitude > 0 then
+        horizontal =
+            direction.Unit *
+            Settings.FlySpeed
+    end
+
+    local vertical = 0
+
+    if UserInputService:IsKeyDown(
+        Enum.KeyCode.Space
+    ) then
+        vertical =
+            Settings.FlyVerticalSpeed
+    end
+
+    if UserInputService:IsKeyDown(
+        Enum.KeyCode.LeftControl
+    ) then
+        vertical =
+            -Settings.FlyVerticalSpeed
+    end
+
+    FlyVelocity.VectorVelocity =
+        horizontal +
+        Vector3.new(
+            0,
+            vertical,
+            0
+        )
+end
+
+--==================================================
 -- SPEED RUN
---============================================================
+--==================================================
 
 local function UpdateSpeed()
+
     if not Humanoid then
         return
     end
 
-    if Humanoid.Health <= 0 then
-        return
-    end
-
     if Settings.SpeedEnabled then
-        Humanoid.WalkSpeed = Settings.SpeedRun
-    else
-        Humanoid.WalkSpeed = NormalWalkSpeed
+        Humanoid.WalkSpeed =
+            Settings.SpeedRun
     end
 end
 
-SpeedConnection =
-    RunService.Heartbeat:Connect(function()
+local function ToggleSpeed()
+
+    Settings.SpeedEnabled =
+        not Settings.SpeedEnabled
+
+    if Humanoid then
 
         if Settings.SpeedEnabled then
-            UpdateSpeed()
+
+            Humanoid.WalkSpeed =
+                Settings.SpeedRun
+
+        else
+
+            Humanoid.WalkSpeed =
+                OriginalWalkSpeed
+
+        end
+    end
+end
+
+--==================================================
+-- GUI
+--==================================================
+
+local OldGui =
+    PlayerGui:FindFirstChild(
+        "XeirenCombatHub"
+    )
+
+if OldGui then
+    OldGui:Destroy()
+end
+
+local ScreenGui =
+    Instance.new("ScreenGui")
+
+ScreenGui.Name =
+    "XeirenCombatHub"
+
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.Parent = PlayerGui
+
+--==================================================
+-- COLORS
+--==================================================
+
+local BG =
+    Color3.fromRGB(13, 13, 18)
+
+local PANEL =
+    Color3.fromRGB(20, 20, 27)
+
+local PANEL2 =
+    Color3.fromRGB(27, 27, 36)
+
+local ACCENT =
+    Color3.fromRGB(120, 70, 255)
+
+local TEXT =
+    Color3.fromRGB(245, 245, 250)
+
+local SUBTEXT =
+    Color3.fromRGB(165, 165, 180)
+
+local GREEN =
+    Color3.fromRGB(70, 220, 120)
+
+local RED =
+    Color3.fromRGB(255, 70, 90)
+
+--==================================================
+-- UI HELPERS
+--==================================================
+
+local function AddCorner(object, radius)
+
+    local corner =
+        Instance.new("UICorner")
+
+    corner.CornerRadius =
+        UDim.new(0, radius or 8)
+
+    corner.Parent = object
+end
+
+local function AddStroke(object)
+
+    local stroke =
+        Instance.new("UIStroke")
+
+    stroke.Color =
+        Color3.fromRGB(55, 55, 70)
+
+    stroke.Transparency = 0.3
+    stroke.Thickness = 1
+
+    stroke.Parent = object
+end
+
+local function CreateLabel(parent, text, size)
+
+    local label =
+        Instance.new("TextLabel")
+
+    label.BackgroundTransparency = 1
+
+    label.Size =
+        UDim2.new(
+            1,
+            -20,
+            0,
+            size or 25
+        )
+
+    label.Text =
+        text
+
+    label.Font =
+        Enum.Font.GothamMedium
+
+    label.TextSize = 13
+
+    label.TextColor3 =
+        TEXT
+
+    label.TextXAlignment =
+        Enum.TextXAlignment.Left
+
+    label.Parent =
+        parent
+
+    return label
+end
+
+local function CreateButton(
+    parent,
+    text,
+    callback
+)
+
+    local button =
+        Instance.new("TextButton")
+
+    button.AutoButtonColor = false
+
+    button.BackgroundColor3 =
+        PANEL2
+
+    button.Size =
+        UDim2.new(
+            1,
+            0,
+            0,
+            38
+        )
+
+    button.Text =
+        text
+
+    button.Font =
+        Enum.Font.GothamMedium
+
+    button.TextSize = 13
+
+    button.TextColor3 =
+        TEXT
+
+    button.Parent =
+        parent
+
+    AddCorner(button, 8)
+
+    AddStroke(button)
+
+    button.Activated:Connect(function()
+
+        callback(button)
+
+    end)
+
+    return button
+end
+
+local function CreateToggle(
+    parent,
+    title,
+    getter,
+    setter
+)
+
+    local button =
+        CreateButton(
+            parent,
+            "",
+            function(button)
+
+                setter(
+                    not getter()
+                )
+
+                local state =
+                    getter()
+
+                button.Text =
+                    title ..
+                    ": " ..
+                    (
+                        state
+                        and "ON"
+                        or "OFF"
+                    )
+
+                button.BackgroundColor3 =
+                    state
+                    and Color3.fromRGB(
+                        55,
+                        35,
+                        100
+                    )
+                    or PANEL2
+            end
+        )
+
+    button.Text =
+        title ..
+        ": " ..
+        (
+            getter()
+            and "ON"
+            or "OFF"
+        )
+
+    if getter() then
+        button.BackgroundColor3 =
+            Color3.fromRGB(
+                55,
+                35,
+                100
+            )
+    end
+
+    return button
+end
+
+local function CreateNumberInput(
+    parent,
+    title,
+    getter,
+    setter
+)
+
+    local frame =
+        Instance.new("Frame")
+
+    frame.Size =
+        UDim2.new(
+            1,
+            0,
+            0,
+            48
+        )
+
+    frame.BackgroundTransparency = 1
+    frame.Parent = parent
+
+    local label =
+        Instance.new("TextLabel")
+
+    label.BackgroundTransparency = 1
+
+    label.Size =
+        UDim2.new(
+            0.52,
+            0,
+            1,
+            0
+        )
+
+    label.Text =
+        title
+
+    label.Font =
+        Enum.Font.GothamMedium
+
+    label.TextSize = 13
+
+    label.TextColor3 =
+        TEXT
+
+    label.TextXAlignment =
+        Enum.TextXAlignment.Left
+
+    label.Parent =
+        frame
+
+    local box =
+        Instance.new("TextBox")
+
+    box.BackgroundColor3 =
+        PANEL2
+
+    box.Size =
+        UDim2.new(
+            0.48,
+            0,
+            0,
+            36
+        )
+
+    box.Position =
+        UDim2.new(
+            0.52,
+            0,
+            0.5,
+            -18
+        )
+
+    box.Text =
+        tostring(getter())
+
+    box.ClearTextOnFocus = false
+
+    box.Font =
+        Enum.Font.GothamMedium
+
+    box.TextSize = 13
+
+    box.TextColor3 =
+        TEXT
+
+    box.Parent =
+        frame
+
+    AddCorner(box, 7)
+    AddStroke(box)
+
+    box.FocusLost:Connect(function()
+
+        local number =
+            tonumber(box.Text)
+
+        if number then
+            setter(number)
+            box.Text =
+                tostring(getter())
+        else
+            box.Text =
+                tostring(getter())
         end
     end)
 
---============================================================
+    return frame
+end
+
+--==================================================
 -- PASSWORD SCREEN
---============================================================
+--==================================================
 
-local PasswordGui = Instance.new("ScreenGui")
-
-PasswordGui.Name = "CombatHubPassword"
-PasswordGui.ResetOnSpawn = false
-PasswordGui.IgnoreGuiInset = true
-PasswordGui.Parent = PlayerGui
-
-local PasswordBackground = Instance.new("Frame")
-
-PasswordBackground.Size = UDim2.fromScale(1, 1)
-PasswordBackground.BackgroundTransparency = 0.2
-PasswordBackground.BackgroundColor3 =
-    Color3.fromRGB(10, 10, 14)
-
-PasswordBackground.Parent = PasswordGui
-
-local PasswordFrame = Instance.new("Frame")
+local PasswordFrame =
+    Instance.new("Frame")
 
 PasswordFrame.Size =
-    UDim2.fromOffset(320, 210)
+    UDim2.fromOffset(360, 230)
 
 PasswordFrame.Position =
-    UDim2.fromScale(0.5, 0.5)
-
-PasswordFrame.AnchorPoint =
-    Vector2.new(0.5, 0.5)
+    UDim2.new(
+        0.5,
+        -180,
+        0.5,
+        -115
+    )
 
 PasswordFrame.BackgroundColor3 =
-    Color3.fromRGB(25, 25, 32)
+    BG
 
-PasswordFrame.Parent = PasswordBackground
+PasswordFrame.Parent =
+    ScreenGui
 
-local PasswordCorner = Instance.new("UICorner")
-PasswordCorner.CornerRadius = UDim.new(0, 14)
-PasswordCorner.Parent = PasswordFrame
+AddCorner(
+    PasswordFrame,
+    14
+)
 
-local PasswordTitle = Instance.new("TextLabel")
+AddStroke(
+    PasswordFrame
+)
 
-PasswordTitle.Size =
-    UDim2.new(1, -30, 0, 45)
+local PasswordTitle =
+    CreateLabel(
+        PasswordFrame,
+        "XEIREN 5V5",
+        35
+    )
 
 PasswordTitle.Position =
-    UDim2.fromOffset(15, 12)
+    UDim2.fromOffset(
+        20,
+        20
+    )
 
-PasswordTitle.BackgroundTransparency = 1
+PasswordTitle.Size =
+    UDim2.new(
+        1,
+        -40,
+        0,
+        30
+    )
 
-PasswordTitle.Text = "COMBAT HUB"
+PasswordTitle.TextSize = 21
 
-PasswordTitle.TextColor3 =
-    Color3.fromRGB(255, 255, 255)
-
-PasswordTitle.Font =
-    Enum.Font.GothamBold
-
-PasswordTitle.TextSize = 24
-
-PasswordTitle.Parent = PasswordFrame
-
-local PasswordSub = Instance.new("TextLabel")
-
-PasswordSub.Size =
-    UDim2.new(1, -30, 0, 25)
+local PasswordSub =
+    CreateLabel(
+        PasswordFrame,
+        "Enter password to continue",
+        25
+    )
 
 PasswordSub.Position =
-    UDim2.fromOffset(15, 50)
-
-PasswordSub.BackgroundTransparency = 1
-
-PasswordSub.Text = "Enter password to continue"
+    UDim2.fromOffset(
+        20,
+        58
+    )
 
 PasswordSub.TextColor3 =
-    Color3.fromRGB(170, 170, 180)
+    SUBTEXT
 
-PasswordSub.Font =
-    Enum.Font.Gotham
-
-PasswordSub.TextSize = 14
-
-PasswordSub.Parent = PasswordFrame
-
-local PasswordBox = Instance.new("TextBox")
+local PasswordBox =
+    Instance.new("TextBox")
 
 PasswordBox.Size =
-    UDim2.new(1, -40, 0, 42)
+    UDim2.new(
+        1,
+        -40,
+        0,
+        42
+    )
 
 PasswordBox.Position =
-    UDim2.fromOffset(20, 82)
+    UDim2.fromOffset(
+        20,
+        95
+    )
 
 PasswordBox.BackgroundColor3 =
-    Color3.fromRGB(40, 40, 50)
-
-PasswordBox.TextColor3 =
-    Color3.fromRGB(255, 255, 255)
+    PANEL2
 
 PasswordBox.PlaceholderText =
     "Password"
 
+PasswordBox.ClearTextOnFocus =
+    false
+
+PasswordBox.Text =
+    ""
+
+PasswordBox.TextColor3 =
+    TEXT
+
 PasswordBox.PlaceholderColor3 =
-    Color3.fromRGB(130, 130, 140)
-
-PasswordBox.Text = ""
-
-PasswordBox.TextSize = 16
+    SUBTEXT
 
 PasswordBox.Font =
     Enum.Font.Gotham
 
-PasswordBox.ClearTextOnFocus = false
+PasswordBox.TextSize = 14
 
-PasswordBox.Parent = PasswordFrame
+PasswordBox.Parent =
+    PasswordFrame
 
-local PasswordBoxCorner = Instance.new("UICorner")
-PasswordBoxCorner.CornerRadius = UDim.new(0, 8)
-PasswordBoxCorner.Parent = PasswordBox
+AddCorner(
+    PasswordBox,
+    8
+)
 
-local UnlockButton = Instance.new("TextButton")
+AddStroke(
+    PasswordBox
+)
 
-UnlockButton.Size =
-    UDim2.new(1, -40, 0, 42)
+local LoginButton =
+    Instance.new("TextButton")
 
-UnlockButton.Position =
-    UDim2.fromOffset(20, 130)
+LoginButton.Size =
+    UDim2.new(
+        1,
+        -40,
+        0,
+        42
+    )
 
-UnlockButton.BackgroundColor3 =
-    Color3.fromRGB(65, 110, 255)
+LoginButton.Position =
+    UDim2.fromOffset(
+        20,
+        150
+    )
 
-UnlockButton.Text = "UNLOCK"
+LoginButton.BackgroundColor3 =
+    ACCENT
 
-UnlockButton.TextColor3 =
-    Color3.fromRGB(255, 255, 255)
+LoginButton.Text =
+    "UNLOCK HUB"
 
-UnlockButton.TextSize = 16
-
-UnlockButton.Font =
+LoginButton.Font =
     Enum.Font.GothamBold
 
-UnlockButton.Parent = PasswordFrame
+LoginButton.TextSize = 13
 
-local UnlockCorner = Instance.new("UICorner")
-UnlockCorner.CornerRadius = UDim.new(0, 8)
-UnlockCorner.Parent = UnlockButton
+LoginButton.TextColor3 =
+    Color3.new(1, 1, 1)
 
-local PasswordStatus = Instance.new("TextLabel")
+LoginButton.Parent =
+    PasswordFrame
 
-PasswordStatus.Size =
-    UDim2.new(1, -40, 0, 25)
+AddCorner(
+    LoginButton,
+    8
+)
 
-PasswordStatus.Position =
-    UDim2.fromOffset(20, 174)
+local ErrorLabel =
+    CreateLabel(
+        PasswordFrame,
+        "",
+        22
+    )
 
-PasswordStatus.BackgroundTransparency = 1
+ErrorLabel.Position =
+    UDim2.fromOffset(
+        20,
+        198
+    )
 
-PasswordStatus.Text = ""
+ErrorLabel.TextColor3 =
+    RED
 
-PasswordStatus.TextColor3 =
-    Color3.fromRGB(255, 90, 90)
-
-PasswordStatus.TextSize = 13
-
-PasswordStatus.Font =
-    Enum.Font.Gotham
-
-PasswordStatus.Parent = PasswordFrame
-
---============================================================
+--==================================================
 -- MAIN HUB
---============================================================
+--==================================================
 
-local function CreateMainHub()
+local MainFrame
 
-    MainGui = Instance.new("ScreenGui")
+local function BuildHub()
 
-    MainGui.Name = "CombatHub"
-    MainGui.ResetOnSpawn = false
-    MainGui.IgnoreGuiInset = true
-    MainGui.Parent = PlayerGui
+    PasswordFrame.Visible = false
 
-    MainFrame = Instance.new("Frame")
+    MainFrame =
+        Instance.new("Frame")
+
+    MainFrame.Name =
+        "MainHub"
 
     MainFrame.Size =
-        UDim2.fromOffset(330, 560)
+        UDim2.fromOffset(
+            430,
+            560
+        )
 
     MainFrame.Position =
-        UDim2.fromOffset(30, 100)
+        UDim2.new(
+            0.5,
+            -215,
+            0.5,
+            -280
+        )
 
     MainFrame.BackgroundColor3 =
-        Color3.fromRGB(20, 20, 26)
+        BG
 
-    MainFrame.Parent = MainGui
+    MainFrame.Parent =
+        ScreenGui
 
-    local MainCorner = Instance.new("UICorner")
-    MainCorner.CornerRadius = UDim.new(0, 14)
-    MainCorner.Parent = MainFrame
+    AddCorner(
+        MainFrame,
+        14
+    )
 
-    --========================================================
+    AddStroke(
+        MainFrame
+    )
+
+    --==============================================
     -- TITLE BAR
-    --========================================================
+    --==============================================
 
-    local TitleBar = Instance.new("Frame")
+    local TitleBar =
+        Instance.new("Frame")
 
     TitleBar.Size =
-        UDim2.new(1, 0, 0, 55)
+        UDim2.new(
+            1,
+            0,
+            0,
+            52
+        )
 
     TitleBar.BackgroundColor3 =
-        Color3.fromRGB(30, 30, 38)
+        PANEL
 
-    TitleBar.Parent = MainFrame
+    TitleBar.Parent =
+        MainFrame
 
-    local TitleCorner = Instance.new("UICorner")
-    TitleCorner.CornerRadius = UDim.new(0, 14)
-    TitleCorner.Parent = TitleBar
+    AddCorner(
+        TitleBar,
+        14
+    )
 
-    local Title = Instance.new("TextLabel")
-
-    Title.Size =
-        UDim2.new(1, -70, 1, 0)
+    local Title =
+        CreateLabel(
+            TitleBar,
+            "XEIREN • 5V5",
+            40
+        )
 
     Title.Position =
-        UDim2.fromOffset(15, 0)
+        UDim2.fromOffset(
+            16,
+            6
+        )
 
-    Title.BackgroundTransparency = 1
-
-    Title.Text = "⚡ COMBAT HUB"
-
-    Title.TextColor3 =
-        Color3.fromRGB(255, 255, 255)
-
-    Title.TextSize = 20
+    Title.Size =
+        UDim2.new(
+            1,
+            -80,
+            0,
+            40
+        )
 
     Title.Font =
         Enum.Font.GothamBold
 
-    Title.TextXAlignment =
-        Enum.TextXAlignment.Left
+    Title.TextSize = 16
 
-    Title.Parent = TitleBar
+    local Close =
+        Instance.new("TextButton")
 
-    local CloseButton = Instance.new("TextButton")
+    Close.Size =
+        UDim2.fromOffset(
+            40,
+            36
+        )
 
-    CloseButton.Size =
-        UDim2.fromOffset(40, 40)
+    Close.Position =
+        UDim2.new(
+            1,
+            -46,
+            0,
+            8
+        )
 
-    CloseButton.Position =
-        UDim2.new(1, -48, 0, 8)
+    Close.BackgroundColor3 =
+        Color3.fromRGB(
+            45,
+            35,
+            55
+        )
 
-    CloseButton.BackgroundColor3 =
-        Color3.fromRGB(180, 55, 55)
+    Close.Text =
+        "×"
 
-    CloseButton.Text = "×"
-
-    CloseButton.TextColor3 =
-        Color3.fromRGB(255, 255, 255)
-
-    CloseButton.TextSize = 25
-
-    CloseButton.Font =
+    Close.Font =
         Enum.Font.GothamBold
 
-    CloseButton.Parent = TitleBar
+    Close.TextSize = 22
 
-    local CloseCorner = Instance.new("UICorner")
-    CloseCorner.CornerRadius = UDim.new(0, 8)
-    CloseCorner.Parent = CloseButton
+    Close.TextColor3 =
+        TEXT
 
-    --========================================================
-    -- DRAGGING
-    --========================================================
+    Close.Parent =
+        TitleBar
 
-    local Dragging = false
-    local DragStart
-    local StartPosition
+    AddCorner(
+        Close,
+        8
+    )
+
+    Close.Activated:Connect(function()
+
+        MainFrame.Visible =
+            false
+
+        ReopenButton.Visible =
+            true
+
+    end)
+
+    --==============================================
+    -- DRAG
+    --==============================================
+
+    local dragging = false
+    local dragStart
+    local startPosition
 
     TitleBar.InputBegan:Connect(function(input)
 
         if input.UserInputType ==
             Enum.UserInputType.MouseButton1
-            or input.UserInputType ==
-            Enum.UserInputType.Touch then
+            or
+            input.UserInputType ==
+            Enum.UserInputType.Touch
+        then
 
-            Dragging = true
+            dragging = true
 
-            DragStart = input.Position
-            StartPosition = MainFrame.Position
+            dragStart =
+                input.Position
+
+            startPosition =
+                MainFrame.Position
 
             input.Changed:Connect(function()
 
                 if input.UserInputState ==
-                    Enum.UserInputState.End then
-
-                    Dragging = false
+                    Enum.UserInputState.End
+                then
+                    dragging = false
                 end
+
             end)
         end
     end)
 
     UserInputService.InputChanged:Connect(function(input)
 
-        if not Dragging then
+        if not dragging then
             return
         end
 
         if input.UserInputType ==
             Enum.UserInputType.MouseMovement
-            or input.UserInputType ==
-            Enum.UserInputType.Touch then
+            or
+            input.UserInputType ==
+            Enum.UserInputType.Touch
+        then
 
-            local Delta =
-                input.Position - DragStart
+            local delta =
+                input.Position -
+                dragStart
 
             MainFrame.Position =
                 UDim2.new(
-                    StartPosition.X.Scale,
-                    StartPosition.X.Offset + Delta.X,
-                    StartPosition.Y.Scale,
-                    StartPosition.Y.Offset + Delta.Y
+                    startPosition.X.Scale,
+                    startPosition.X.Offset +
+                        delta.X,
+
+                    startPosition.Y.Scale,
+                    startPosition.Y.Offset +
+                        delta.Y
                 )
         end
     end)
 
-    --========================================================
-    -- SCROLL AREA
-    --========================================================
+    --==============================================
+    -- SCROLL
+    --==============================================
 
-    local Scroll = Instance.new("ScrollingFrame")
+    local Scroll =
+        Instance.new("ScrollingFrame")
 
     Scroll.Size =
-        UDim2.new(1, -16, 1, -70)
+        UDim2.new(
+            1,
+            -24,
+            1,
+            -68
+        )
 
     Scroll.Position =
-        UDim2.fromOffset(8, 62)
+        UDim2.fromOffset(
+            12,
+            58
+        )
 
-    Scroll.BackgroundTransparency = 1
+    Scroll.BackgroundTransparency =
+        1
 
     Scroll.BorderSizePixel = 0
 
-    Scroll.ScrollBarThickness = 5
+    Scroll.ScrollBarThickness = 4
+
+    Scroll.ScrollBarImageColor3 =
+        ACCENT
+
+    Scroll.AutomaticCanvasSize =
+        Enum.AutomaticSize.Y
 
     Scroll.CanvasSize =
-        UDim2.new(0, 0, 0, 850)
+        UDim2.new()
 
-    Scroll.Parent = MainFrame
+    Scroll.Parent =
+        MainFrame
 
-    local Layout = Instance.new("UIListLayout")
+    local Layout =
+        Instance.new("UIListLayout")
 
     Layout.Padding =
-        UDim.new(0, 8)
+        UDim.new(
+            0,
+            7
+        )
 
-    Layout.HorizontalAlignment =
-        Enum.HorizontalAlignment.Center
+    Layout.SortOrder =
+        Enum.SortOrder.LayoutOrder
 
-    Layout.Parent = Scroll
+    Layout.Parent =
+        Scroll
 
-    --========================================================
-    -- HELPERS
-    --========================================================
+    --==============================================
+    -- AIM SECTION
+    --==============================================
 
-    local function CreateSection(text)
+    local AimTitle =
+        CreateLabel(
+            Scroll,
+            "🎯 AIM ASSIST",
+            30
+        )
 
-        local Label = Instance.new("TextLabel")
+    AimTitle.TextColor3 =
+        ACCENT
 
-        Label.Size =
-            UDim2.new(1, -10, 0, 30)
-
-        Label.BackgroundTransparency = 1
-
-        Label.Text = text
-
-        Label.TextColor3 =
-            Color3.fromRGB(120, 170, 255)
-
-        Label.TextSize = 15
-
-        Label.Font =
-            Enum.Font.GothamBold
-
-        Label.TextXAlignment =
-            Enum.TextXAlignment.Left
-
-        Label.Parent = Scroll
-
-        return Label
-    end
-
-    local function CreateToggle(text, callback)
-
-        local Button = Instance.new("TextButton")
-
-        Button.Size =
-            UDim2.new(1, -10, 0, 42)
-
-        Button.BackgroundColor3 =
-            Color3.fromRGB(40, 40, 50)
-
-        Button.TextColor3 =
-            Color3.fromRGB(255, 255, 255)
-
-        Button.TextSize = 14
-
-        Button.Font =
-            Enum.Font.GothamSemibold
-
-        Button.TextXAlignment =
-            Enum.TextXAlignment.Left
-
-        Button.Text = text .. ": OFF"
-
-        Button.Parent = Scroll
-
-        local Corner = Instance.new("UICorner")
-        Corner.CornerRadius = UDim.new(0, 8)
-        Corner.Parent = Button
-
-        local State = false
-
-        local function Refresh()
-
-            if State then
-                Button.Text =
-                    text .. ": ON"
-
-                Button.BackgroundColor3 =
-                    Color3.fromRGB(55, 120, 75)
-            else
-                Button.Text =
-                    text .. ": OFF"
-
-                Button.BackgroundColor3 =
-                    Color3.fromRGB(40, 40, 50)
-            end
+    CreateToggle(
+        Scroll,
+        "Aim Assist",
+        function()
+            return Settings.AimEnabled
+        end,
+        function(value)
+            Settings.AimEnabled = value
         end
+    )
 
-        Button.Activated:Connect(function()
-
-            State = not State
-
-            Refresh()
-
-            callback(State)
-        end)
-
-        return Button
-    end
-
-    local function CreateNumberInput(text, default, callback)
-
-        local Holder = Instance.new("Frame")
-
-        Holder.Size =
-            UDim2.new(1, -10, 0, 42)
-
-        Holder.BackgroundColor3 =
-            Color3.fromRGB(40, 40, 50)
-
-        Holder.Parent = Scroll
-
-        local Corner = Instance.new("UICorner")
-        Corner.CornerRadius = UDim.new(0, 8)
-        Corner.Parent = Holder
-
-        local Label = Instance.new("TextLabel")
-
-        Label.Size =
-            UDim2.new(0.55, 0, 1, 0)
-
-        Label.Position =
-            UDim2.fromOffset(12, 0)
-
-        Label.BackgroundTransparency = 1
-
-        Label.Text = text
-
-        Label.TextColor3 =
-            Color3.fromRGB(255, 255, 255)
-
-        Label.TextSize = 13
-
-        Label.Font =
-            Enum.Font.Gotham
-
-        Label.TextXAlignment =
-            Enum.TextXAlignment.Left
-
-        Label.Parent = Holder
-
-        local Box = Instance.new("TextBox")
-
-        Box.Size =
-            UDim2.new(0.35, 0, 0, 30)
-
-        Box.Position =
-            UDim2.new(0.62, 0, 0.5, -15)
-
-        Box.BackgroundColor3 =
-            Color3.fromRGB(25, 25, 32)
-
-        Box.TextColor3 =
-            Color3.fromRGB(255, 255, 255)
-
-        Box.TextSize = 13
-
-        Box.Font =
-            Enum.Font.Gotham
-
-        Box.Text =
-            tostring(default)
-
-        Box.ClearTextOnFocus = false
-
-        Box.Parent = Holder
-
-        local BoxCorner = Instance.new("UICorner")
-        BoxCorner.CornerRadius = UDim.new(0, 6)
-        BoxCorner.Parent = Box
-
-        Box.FocusLost:Connect(function()
-
-            local Number =
-                tonumber(Box.Text)
-
-            if Number then
-                callback(Number)
-            else
-                Box.Text =
-                    tostring(default)
-            end
-        end)
-
-        return Box
-    end
-
-    --========================================================
-    -- AIM
-    --========================================================
-
-    CreateSection("🎯 AIM")
-
-    CreateToggle("Aim Assist", function(state)
-
-        Settings.AimEnabled = state
-
-    end)
+    CreateToggle(
+        Scroll,
+        "360° Lock",
+        function()
+            return Settings.Full360
+        end,
+        function(value)
+            Settings.Full360 = value
+        end
+    )
 
     CreateNumberInput(
+        Scroll,
+        "Lock Strength 1-100",
+        function()
+            return Settings.LockStrength
+        end,
+        function(value)
+            Settings.LockStrength =
+                math.clamp(
+                    value,
+                    1,
+                    100
+                )
+        end
+    )
+
+    CreateNumberInput(
+        Scroll,
         "Aim Speed",
-        Settings.AimSpeed,
+        function()
+            return Settings.AimSpeed
+        end,
         function(value)
-
             Settings.AimSpeed =
-                math.clamp(value, 1, 100)
-
+                math.clamp(
+                    value,
+                    1,
+                    200
+                )
         end
     )
 
     CreateNumberInput(
+        Scroll,
         "Aim Distance",
-        Settings.AimDistance,
+        function()
+            return Settings.AimDistance
+        end,
         function(value)
-
             Settings.AimDistance =
-                math.clamp(value, 10, 5000)
-
+                math.clamp(
+                    value,
+                    10,
+                    5000
+                )
         end
     )
 
     CreateNumberInput(
-        "Aim FOV",
-        Settings.AimFOV,
+        Scroll,
+        "FOV",
+        function()
+            return Settings.AimFOV
+        end,
         function(value)
-
             Settings.AimFOV =
-                math.clamp(value, 10, 1000)
-
+                math.clamp(
+                    value,
+                    10,
+                    1000
+                )
         end
     )
 
-    --========================================================
-    -- ESP
-    --========================================================
+    local TargetButton =
+        CreateButton(
+            Scroll,
+            "Target: " ..
+            Settings.AimPart,
+            function(button)
 
-    CreateSection("👁 ESP")
+                if Settings.AimPart ==
+                    "Head"
+                then
+                    Settings.AimPart =
+                        "Body"
+                else
+                    Settings.AimPart =
+                        "Head"
+                end
 
-    CreateToggle("ESP", function(state)
-
-        Settings.ESPEnabled = state
-
-        if not state then
-
-            for player in pairs(ESPObjects) do
-                RemoveESP(player)
+                button.Text =
+                    "Target: " ..
+                    Settings.AimPart
             end
+        )
 
+    --==============================================
+    -- ESP SECTION
+    --==============================================
+
+    local ESPTitle =
+        CreateLabel(
+            Scroll,
+            "👁 ESP",
+            30
+        )
+
+    ESPTitle.TextColor3 =
+        ACCENT
+
+    CreateToggle(
+        Scroll,
+        "Strong ESP",
+        function()
+            return Settings.ESPEnabled
+        end,
+        function(value)
+            Settings.ESPEnabled =
+                value
         end
+    )
 
-    end)
-
-    CreateToggle("Tracers", function(state)
-
-        Settings.TracerEnabled = state
-
-        if not state then
-
-            for player in pairs(TracerObjects) do
-                RemoveTracer(player)
-            end
-
+    CreateToggle(
+        Scroll,
+        "ESP Box",
+        function()
+            return Settings.ESPBox
+        end,
+        function(value)
+            Settings.ESPBox =
+                value
         end
+    )
 
-    end)
+    CreateToggle(
+        Scroll,
+        "ESP Name",
+        function()
+            return Settings.ESPName
+        end,
+        function(value)
+            Settings.ESPName =
+                value
+        end
+    )
+
+    CreateToggle(
+        Scroll,
+        "ESP Health",
+        function()
+            return Settings.ESPHealth
+        end,
+        function(value)
+            Settings.ESPHealth =
+                value
+        end
+    )
+
+    CreateToggle(
+        Scroll,
+        "ESP Distance",
+        function()
+            return Settings.ESPDistanceText
+        end,
+        function(value)
+            Settings.ESPDistanceText =
+                value
+        end
+    )
+
+    CreateToggle(
+        Scroll,
+        "Head Marker",
+        function()
+            return Settings.ESPHead
+        end,
+        function(value)
+            Settings.ESPHead =
+                value
+        end
+    )
+
+    CreateToggle(
+        Scroll,
+        "Always On Top",
+        function()
+            return Settings.ESPAlwaysOnTop
+        end,
+        function(value)
+            Settings.ESPAlwaysOnTop =
+                value
+        end
+    )
+
+    CreateToggle(
+        Scroll,
+        "Team Color",
+        function()
+            return Settings.ESPTeamColor
+        end,
+        function(value)
+            Settings.ESPTeamColor =
+                value
+        end
+    )
 
     CreateNumberInput(
+        Scroll,
         "ESP Distance",
-        Settings.ESPDistance,
+        function()
+            return Settings.ESPDistance
+        end,
         function(value)
 
             Settings.ESPDistance =
-                math.clamp(value, 10, 5000)
+                math.clamp(
+                    value,
+                    50,
+                    5000
+                )
+        end
+    )
+
+    CreateToggle(
+        Scroll,
+        "Tracers",
+        function()
+            return Settings.TracerEnabled
+        end,
+        function(value)
+            Settings.TracerEnabled =
+                value
+        end
+    )
+
+    --==============================================
+    -- CHECKS
+    --==============================================
+
+    local CheckTitle =
+        CreateLabel(
+            Scroll,
+            "⚙ CHECKS",
+            30
+        )
+
+    CheckTitle.TextColor3 =
+        ACCENT
+
+    CreateToggle(
+        Scroll,
+        "Team Check",
+        function()
+            return Settings.TeamCheck
+        end,
+        function(value)
+            Settings.TeamCheck =
+                value
+        end
+    )
+
+    CreateToggle(
+        Scroll,
+        "Wall Check",
+        function()
+            return Settings.WallCheck
+        end,
+        function(value)
+            Settings.WallCheck =
+                value
+        end
+    )
+
+    --==============================================
+    -- FLY
+    --==============================================
+
+    local FlyTitle =
+        CreateLabel(
+            Scroll,
+            "🪽 FLY",
+            30
+        )
+
+    FlyTitle.TextColor3 =
+        ACCENT
+
+    CreateToggle(
+        Scroll,
+        "Fly",
+        function()
+            return Settings.FlyEnabled
+        end,
+        function(value)
+
+            if value then
+                StartFly()
+            else
+                StopFly()
+            end
 
         end
     )
 
-    --========================================================
-    -- CHECKS
-    --========================================================
-
-    CreateSection("🛡 CHECKS")
-
-    CreateToggle("Team Check", function(state)
-
-        Settings.TeamCheck = state
-
-    end)
-
-    CreateToggle("Wall Check", function(state)
-
-        Settings.WallCheck = state
-
-    end)
-
-    --========================================================
-    -- MOVEMENT
-    --========================================================
-
-    CreateSection("🏃 MOVEMENT")
-
-    CreateToggle("Speed Run", function(state)
-
-        Settings.SpeedEnabled = state
-
-        UpdateSpeed()
-
-    end)
+    CreateNumberInput(
+        Scroll,
+        "Fly Speed",
+        function()
+            return Settings.FlySpeed
+        end,
+        function(value)
+            Settings.FlySpeed =
+                math.clamp(
+                    value,
+                    1,
+                    1000
+                )
+        end
+    )
 
     CreateNumberInput(
+        Scroll,
+        "Vertical Speed",
+        function()
+            return Settings.FlyVerticalSpeed
+        end,
+        function(value)
+            Settings.FlyVerticalSpeed =
+                math.clamp(
+                    value,
+                    1,
+                    1000
+                )
+        end
+    )
+
+    --==============================================
+    -- SPEED
+    --==============================================
+
+    local SpeedTitle =
+        CreateLabel(
+            Scroll,
+            "⚡ MOVEMENT",
+            30
+        )
+
+    SpeedTitle.TextColor3 =
+        ACCENT
+
+    CreateToggle(
+        Scroll,
+        "Speed Run",
+        function()
+            return Settings.SpeedEnabled
+        end,
+        function(value)
+
+            if value then
+                Settings.SpeedEnabled =
+                    true
+                UpdateSpeed()
+            else
+                ToggleSpeed()
+            end
+
+        end
+    )
+
+    CreateNumberInput(
+        Scroll,
         "Run Speed",
-        Settings.SpeedRun,
+        function()
+            return Settings.SpeedRun
+        end,
         function(value)
 
             Settings.SpeedRun =
-                math.clamp(value, 16, 500)
+                math.clamp(
+                    value,
+                    1,
+                    300
+                )
 
             if Settings.SpeedEnabled then
                 UpdateSpeed()
             end
-
         end
     )
 
-    CreateToggle("Fly", function(state)
-
-        SetFly(state)
-
-    end)
-
-    CreateNumberInput(
-        "Fly Speed",
-        Settings.FlySpeed,
-        function(value)
-
-            Settings.FlySpeed =
-                math.clamp(value, 1, 500)
-
-        end
-    )
-
-    --========================================================
+    --==============================================
     -- INFO
-    --========================================================
+    --==============================================
 
-    CreateSection("⌨ CONTROLS")
-
-    local Info = Instance.new("TextLabel")
-
-    Info.Size =
-        UDim2.new(1, -10, 0, 80)
-
-    Info.BackgroundColor3 =
-        Color3.fromRGB(30, 30, 38)
-
-    Info.Text =
-        "R = Toggle Fly\n" ..
-        "V = Toggle Speed Run\n" ..
-        "WASD = Fly Movement\n" ..
-        "SPACE = Up\n" ..
-        "LEFT CTRL = Down"
+    local Info =
+        CreateLabel(
+            Scroll,
+            "R = Fly   |   V = Speed Run\n" ..
+            "360° Lock ignores screen FOV and searches around you.",
+            45
+        )
 
     Info.TextColor3 =
-        Color3.fromRGB(190, 190, 200)
+        SUBTEXT
 
-    Info.TextSize = 13
-
-    Info.Font =
-        Enum.Font.Gotham
-
-    Info.TextWrapped = true
-
-    Info.Parent = Scroll
-
-    local InfoCorner = Instance.new("UICorner")
-    InfoCorner.CornerRadius = UDim.new(0, 8)
-    InfoCorner.Parent = Info
-
-    --========================================================
-    -- CLOSE / REOPEN
-    --========================================================
-
-    CloseButton.Activated:Connect(function()
-
-        MainFrame.Visible = false
-
-    end)
-
-    local ReopenButton = Instance.new("TextButton")
-
-    ReopenButton.Size =
-        UDim2.fromOffset(65, 65)
-
-    ReopenButton.Position =
-        UDim2.new(0, 20, 0.5, -32)
-
-    ReopenButton.BackgroundColor3 =
-        Color3.fromRGB(50, 100, 220)
-
-    ReopenButton.Text = "HUB"
-
-    ReopenButton.TextColor3 =
-        Color3.fromRGB(255, 255, 255)
-
-    ReopenButton.TextSize = 15
-
-    ReopenButton.Font =
-        Enum.Font.GothamBold
-
-    ReopenButton.Parent = MainGui
-
-    local ReopenCorner = Instance.new("UICorner")
-    ReopenCorner.CornerRadius = UDim.new(1, 0)
-    ReopenCorner.Parent = ReopenButton
-
-    ReopenButton.Activated:Connect(function()
-
-        MainFrame.Visible = true
-
-    end)
 end
 
---============================================================
--- PASSWORD CHECK
---============================================================
+--==================================================
+-- REOPEN BUTTON
+--==================================================
 
-local function Unlock()
+ReopenButton =
+    Instance.new("TextButton")
 
-    if PasswordBox.Text == PASSWORD then
+ReopenButton.Name =
+    "ReopenHub"
 
-        PasswordGui:Destroy()
+ReopenButton.Size =
+    UDim2.fromOffset(
+        115,
+        42
+    )
 
-        CreateMainHub()
+ReopenButton.Position =
+    UDim2.new(
+        0,
+        20,
+        0.5,
+        -21
+    )
+
+ReopenButton.BackgroundColor3 =
+    ACCENT
+
+ReopenButton.Text =
+    "XEIREN HUB"
+
+ReopenButton.Font =
+    Enum.Font.GothamBold
+
+ReopenButton.TextSize = 12
+
+ReopenButton.TextColor3 =
+    Color3.new(1, 1, 1)
+
+ReopenButton.Visible = false
+
+ReopenButton.Parent =
+    ScreenGui
+
+AddCorner(
+    ReopenButton,
+    9
+)
+
+ReopenButton.Activated:Connect(function()
+
+    if MainFrame then
+        MainFrame.Visible =
+            true
+    end
+
+    ReopenButton.Visible =
+        false
+
+end)
+
+--==================================================
+-- LOGIN
+--==================================================
+
+local function AttemptLogin()
+
+    if PasswordBox.Text ==
+        "anakin"
+    then
+
+        BuildHub()
 
     else
 
-        PasswordStatus.Text =
-            "❌ Wrong password"
+        ErrorLabel.Text =
+            "Wrong password"
 
         PasswordBox.Text = ""
 
-        task.delay(1.5, function()
+        task.delay(
+            2,
+            function()
 
-            if PasswordStatus then
-                PasswordStatus.Text = ""
+                if ErrorLabel then
+                    ErrorLabel.Text = ""
+                end
+
             end
-
-        end)
+        )
     end
 end
 
-UnlockButton.Activated:Connect(Unlock)
+LoginButton.Activated:Connect(
+    AttemptLogin
+)
 
-PasswordBox.FocusLost:Connect(function(enterPressed)
+PasswordBox.FocusLost:Connect(
+    function(enterPressed)
 
-    if enterPressed then
-        Unlock()
+        if enterPressed then
+            AttemptLogin()
+        end
+
     end
+)
 
-end)
+--==================================================
+-- KEYBINDS
+--==================================================
 
---============================================================
--- KEYBOARD
---============================================================
+table.insert(
+    Connections,
+    UserInputService.InputBegan:Connect(
+        function(input, processed)
 
-UserInputService.InputBegan:Connect(function(input, processed)
+            if processed then
+                return
+            end
 
-    if processed then
-        return
-    end
+            if input.KeyCode ==
+                Enum.KeyCode.R
+            then
 
-    if input.KeyCode == Enum.KeyCode.R then
+                ToggleFly()
 
-        SetFly(not Settings.FlyEnabled)
+            elseif input.KeyCode ==
+                Enum.KeyCode.V
+            then
 
-    elseif input.KeyCode == Enum.KeyCode.V then
+                ToggleSpeed()
 
-        Settings.SpeedEnabled =
-            not Settings.SpeedEnabled
+            end
+        end
+    )
+)
 
-        UpdateSpeed()
-    end
-end)
-
---============================================================
+--==================================================
 -- MAIN LOOP
---============================================================
+--==================================================
 
-RunService.RenderStepped:Connect(function()
+table.insert(
+    Connections,
+    RunService.RenderStepped:Connect(
+        function(dt)
 
-    if Settings.AimEnabled then
-        UpdateAim()
+            UpdateAim(dt)
+            UpdateFly()
+            UpdateSpeed()
+
+            if Settings.ESPEnabled then
+
+                for _, player in ipairs(
+                    Players:GetPlayers()
+                ) do
+
+                    if player ~= LocalPlayer then
+                        UpdateESP(player)
+                    end
+
+                end
+
+            else
+
+                for _, objects in pairs(
+                    ESPObjects
+                ) do
+
+                    if objects.Highlight then
+                        objects.Highlight.Enabled =
+                            false
+                    end
+
+                    if objects.Billboard then
+                        objects.Billboard.Enabled =
+                            false
+                    end
+
+                end
+
+                for _, tracer in pairs(
+                    TracerObjects
+                ) do
+
+                    if tracer.Beam then
+                        tracer.Beam.Enabled =
+                            false
+                    end
+
+                end
+            end
+        end
+    )
+)
+
+--==================================================
+-- INITIALIZE ESP
+--==================================================
+
+for _, player in ipairs(
+    Players:GetPlayers()
+) do
+
+    if player ~= LocalPlayer then
+        CreateESP(player)
+        CreateTracer(player)
     end
 
-    UpdateESP()
-    UpdateTracers()
+end
 
-end)
+table.insert(
+    Connections,
+    Players.PlayerAdded:Connect(
+        function(player)
 
-print("================================")
-print("Combat Hub loaded")
-print("Password: anakin")
-print("R = Fly")
-print("V = Speed Run")
-print("================================")
+            CreateESP(player)
+            CreateTracer(player)
+
+        end
+    )
+)
+
+--==================================================
+-- CLEANUP ON CHARACTER DEATH
+--==================================================
+
+table.insert(
+    Connections,
+    RunService.Heartbeat:Connect(
+        function()
+
+            if Humanoid then
+
+                if Humanoid.Health <= 0 then
+
+                    if Settings.FlyEnabled then
+                        StopFly()
+                    end
+
+                end
+            end
+        end
+    )
+)
+
+print(
+    "[Xeiren] 5v5 Combat Hub loaded."
+)
